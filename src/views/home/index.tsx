@@ -16,283 +16,494 @@ const GameSandbox: FC = () => {
   const [started, setStarted] = useState(false);
   const [gameOver, setGameOver] = useState(false);
   const [score, setScore] = useState(0);
-  const [time, setTime] = useState(0);
+  const [highScore, setHighScore] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return parseInt(localStorage.getItem('turboShiftHighScore') || '0');
+    }
+    return 0;
+  });
+  const [distance, setDistance] = useState(0);
   const [lives, setLives] = useState(3);
-  const [carPos, setCarPos] = useState(50);
+  const [combo, setCombo] = useState(0);
+  const [maxCombo, setMaxCombo] = useState(0);
+  const [level, setLevel] = useState(1);
+  const [carX, setCarX] = useState(50);
   const [speed, setSpeed] = useState(1);
-  const [bullets, setBullets] = useState<{id: number, x: number, y: number}[]>([]);
-  const [obstacles, setObstacles] = useState<{id: number, x: number, y: number, type: string, hit?: boolean}[]>([]);
+  const [shieldActive, setShieldActive] = useState(false);
+  const [shieldCharge, setShieldCharge] = useState(0);
   const [roadOffset, setRoadOffset] = useState(0);
-  const [nextId, setNextId] = useState(0);
+  const [lastShieldDistance, setLastShieldDistance] = useState(0);
+  const [objects, setObjects] = useState<{id: number, x: number, y: number, type: 'coin' | 'car' | 'shield' | 'truck' | 'life', hit?: boolean}[]>([]);
+  const [particles, setParticles] = useState<{id: number, x: number, y: number, vx: number, vy: number, color: string, life: number}[]>([]);
+  const [shake, setShake] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
 
-  // Timer
+  // Speed and distance tracking
   useEffect(() => {
     if (!started || gameOver) return;
     const timer = setInterval(() => {
-      setTime(t => t + 1);
-      // Increase speed every 10 seconds
-      setSpeed(s => Math.min(3, 1 + Math.floor(time / 10) * 0.3));
-    }, 1000);
+      const currentSpeed = shieldActive ? speed * 1.5 : speed;
+      setDistance(d => {
+        const newDistance = d + currentSpeed;
+        // Level up every 150m, max level 10
+        const newLevel = Math.min(10, Math.floor(newDistance / 150) + 1);
+        setLevel(newLevel);
+        
+        // Speed increases every 300m (very gradual)
+        const speedMilestone = Math.floor(newDistance / 300);
+        const previousMilestone = Math.floor(d / 300);
+        if (speedMilestone > previousMilestone) {
+          setSpeed(s => Math.min(4, s + 0.2));
+        }
+        
+        return newDistance;
+      });
+    }, 100);
     return () => clearInterval(timer);
-  }, [started, gameOver, time]);
+  }, [started, gameOver, speed, shieldActive]);
+
+  // Combo decay
+  useEffect(() => {
+    if (combo > 0 && started && !gameOver) {
+      const timer = setTimeout(() => setCombo(0), 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [combo, started, gameOver]);
 
   // Game loop
   useEffect(() => {
     if (!started || gameOver) return;
 
     const interval = setInterval(() => {
+      const currentSpeed = shieldActive ? speed * 1.5 : speed;
+      const levelSpeed = 1 + (level - 1) * 0.2; // Speed multiplier based on level
+      
       // Animate road
-      setRoadOffset(prev => (prev + speed * 2) % 100);
+      setRoadOffset(prev => (prev + currentSpeed * 3) % 100);
 
-      // Move bullets up
-      setBullets(prev => prev.map(b => ({
-        ...b,
-        y: b.y - 4
-      })).filter(b => b.y > -5));
-
-      // Move obstacles down (faster with speed)
-      setObstacles(prev => {
-        const updated = prev.map(o => o.hit ? o : { ...o, y: o.y + (1.2 * speed) });
+      // Move objects down
+      setObjects(prev => {
+        const updated = prev.map(o => o.hit ? o : { ...o, y: o.y + (2 * currentSpeed * levelSpeed) });
+        updated.forEach(obj => {
+          if (Math.abs(obj.x - carX) < 12 && obj.y > 75 && obj.y < 95 && !obj.hit) {
+            if (obj.type === 'coin') {
+              // Collect coin
+              const points = 10 + (combo * 5);
+              setScore(s => s + points);
+              setCombo(c => {
+                const newCombo = c + 1;
+                setMaxCombo(m => Math.max(m, newCombo));
+                return newCombo;
+              });
+              setShieldCharge(n => Math.min(100, n + 10));
+              createParticles(carX, 85, '#fbbf24', 6);
+              obj.hit = true;
+            } else if (obj.type === 'shield') {
+              // Collect shield boost
+              setShieldCharge(100);
+              setScore(s => s + 50);
+              createParticles(carX, 85, '#00ffff', 8);
+              obj.hit = true;
+            } else if (obj.type === 'life') {
+              // Collect life
+              setLives(l => Math.min(5, l + 1));
+              setScore(s => s + 100);
+              createParticles(carX, 85, '#ff69b4', 10);
+              obj.hit = true;
+            } else if (obj.type === 'car' || obj.type === 'truck') {
+              // Hit obstacle
+              if (!shieldActive) {
+                setShake(15);
+                setTimeout(() => setShake(0), 300);
+                setCombo(0);
+                setSpeed(s => Math.max(1, s - 0.5));
+                setLives(l => {
+                  const newLives = l - 1;
+                  if (newLives <= 0) {
+                    setGameOver(true);
+                    // Update high score
+                    setScore(currentScore => {
+                      if (currentScore > highScore) {
+                        setHighScore(currentScore);
+                        if (typeof window !== 'undefined') {
+                          localStorage.setItem('turboShiftHighScore', currentScore.toString());
+                        }
+                      }
+                      return currentScore;
+                    });
+                  }
+                  return newLives;
+                });
+                createParticles(carX, 85, '#ff0000', 12);
+              } else {
+                // Destroy with shield
+                setScore(s => s + 30);
+                createParticles(carX, obj.y, '#00ffff', 10);
+              }
+              obj.hit = true;
+            }
+          }
+        });
         
-        // Check collision with car
-        const carCollision = updated.find(o => 
-          !o.hit && 
-          o.y > 80 && o.y < 95 && 
-          Math.abs(o.x - carPos) < 12
-        );
-        
-        if (carCollision) {
-          setLives(l => {
-            const newLives = l - 1;
-            if (newLives <= 0) setGameOver(true);
-            return newLives;
-          });
-          return updated.filter(o => o.id !== carCollision.id);
-        }
-        
-        // Remove obstacles that passed
-        return updated.filter(o => !o.hit && o.y < 105 || o.hit && o.y > -5);
+        return updated.filter(o => (!o.hit && o.y < 110) || (o.hit && o.y < 120));
       });
 
-      // Spawn obstacles (more frequent with speed)
-      if (Math.random() < 0.02 + speed * 0.01) {
-        const obstacleTypes = ['🚧', '🛢️', '⚠️', '🔥', '💎'];
-        setObstacles(prev => [...prev, {
+      // Spawn objects - more frequent at higher levels
+      const spawnRate = 0.015 + (level * 0.008) + currentSpeed * 0.003;
+      if (Math.random() < spawnRate) {
+        const rand = Math.random();
+        let type: 'coin' | 'car' | 'shield' | 'truck' | 'life';
+        
+        // More cars/trucks at higher levels
+        const carChance = 0.30 + (level * 0.04); // Increases with level
+        const truckChance = carChance + 0.15 + (level * 0.02);
+        const coinChance = Math.max(0.15, 0.40 - (level * 0.02)); // Decreases with level
+        
+        // Shield spawning controlled by distance - approximately 1 per 100m
+        const canSpawnShield = (distance - lastShieldDistance) >= 100;
+        
+        if (rand < coinChance) type = 'coin';
+        else if (rand < coinChance + carChance) type = 'car';
+        else if (rand < truckChance) type = 'truck';
+        else if (rand < 0.99 && canSpawnShield) {
+          type = 'shield';
+          setLastShieldDistance(distance);
+        }
+        else if (rand >= 0.99) type = 'life'; // 1% chance - extremely rare
+        else type = 'car'; // Default to car if shield not available
+        
+        setObjects(prev => [...prev, {
           id: Date.now() + Math.random(),
           x: Math.random() * 70 + 15,
-          y: -5,
-          type: obstacleTypes[Math.floor(Math.random() * obstacleTypes.length)]
+          y: -10,
+          type
         }]);
       }
 
-      // Collision detection between bullets and obstacles
-      setBullets(prevB => {
-        setObstacles(prevO => {
-          const newObstacles = [...prevO];
-          const newBullets = prevB.filter(b => {
-            let hit = false;
-            newObstacles.forEach(o => {
-              if (!o.hit && Math.abs(b.x - o.x) < 10 && Math.abs(b.y - o.y) < 10) {
-                o.hit = true;
-                o.y = o.y - 3; // Fly up when destroyed
-                hit = true;
-                const points = o.type === '💎' ? 50 : 20;
-                setScore(s => s + points);
-              }
-            });
-            return !hit;
-          });
-          return newObstacles;
-        });
-        return prevB;
-      });
+      // Update particles
+      setParticles(prev => prev
+        .map(p => ({
+          ...p,
+          x: p.x + p.vx,
+          y: p.y + p.vy,
+          vy: p.vy + 0.3,
+          life: p.life - 1
+        }))
+        .filter(p => p.life > 0)
+      );
     }, 30);
 
     return () => clearInterval(interval);
-  }, [started, gameOver, carPos, speed]);
+  }, [started, gameOver, carX, speed, shieldActive, combo, level, distance, lastShieldDistance]);
+
+  const createParticles = (x: number, y: number, color: string, count: number) => {
+    const newParticles = Array.from({ length: count }, (_, i) => ({
+      id: Date.now() + i + Math.random(),
+      x,
+      y,
+      vx: (Math.random() - 0.5) * 3,
+      vy: (Math.random() - 1) * 3,
+      color,
+      life: 15 + Math.random() * 10
+    }));
+    setParticles(prev => [...prev, ...newParticles]);
+  };
 
   const moveCar = (clientX: number, rect: DOMRect) => {
     const x = ((clientX - rect.left) / rect.width) * 100;
-    setCarPos(Math.max(15, Math.min(85, x)));
+    setCarX(Math.max(10, Math.min(90, x)));
   };
 
-  const shoot = () => {
-    if (gameOver) return;
-    const id = nextId;
-    setNextId(id + 1);
-    setBullets(prev => [...prev, { 
-      id, 
-      x: carPos, 
-      y: 80
-    }]);
+  const activateShield = () => {
+    if (shieldCharge >= 100 && !shieldActive) {
+      setShieldActive(true);
+      setShieldCharge(0);
+      setTimeout(() => setShieldActive(false), 3000);
+    }
   };
 
   const startGame = () => {
     setScore(0);
-    setTime(0);
+    setDistance(0);
     setLives(3);
+    setCombo(0);
+    setMaxCombo(0);
+    setLevel(1);
     setSpeed(1);
+    setCarX(50);
+    setShieldActive(false);
+    setShieldCharge(0);
+    setLastShieldDistance(0);
     setGameOver(false);
     setStarted(true);
-    setBullets([]);
-    setObstacles([]);
-    setCarPos(50);
+    setObjects([]);
+    setParticles([]);
     setRoadOffset(0);
   };
 
   return (
-    <div className="w-full flex justify-center py-6">
-      <div className="w-[360px] aspect-[9/16] bg-gradient-to-b from-gray-900 via-slate-800 to-gray-900 rounded-3xl shadow-xl p-4 flex flex-col text-white relative overflow-hidden">
-        
+    <div className="w-full h-screen flex justify-center items-center bg-black md:py-6">
+      <div 
+        className="w-full h-full md:w-[400px] md:h-[calc(400px*16/9)] md:max-h-[90vh] bg-gradient-to-b from-gray-900 via-gray-800 to-black md:rounded-3xl shadow-2xl p-3 md:p-4 flex flex-col text-white relative overflow-hidden"
+        style={{
+          transform: `translate(${shake * (Math.random() - 0.5)}px, ${shake * (Math.random() - 0.5)}px)`
+        }}
+      >
         {/* Header */}
-        <div className="flex justify-between items-center mb-2 text-sm font-bold">
-          <div className="flex items-center gap-2">
-            <span className="text-cyan-400">⏱️ {time}s</span>
-            <span className="text-xs text-gray-400">x{speed.toFixed(1)}</span>
+        <div className="relative z-10 flex justify-between items-center mb-2 text-sm font-bold">
+          <div className="flex flex-col gap-1">
+            <div className="text-yellow-400 text-lg">💰 {score}</div>
+            <div className="text-xs text-cyan-300">{Math.floor(distance)}m</div>
+            <div className="text-xs text-purple-400">🎯 Level {level}</div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col items-end gap-1">
             <div className="flex gap-1">
               {[...Array(lives)].map((_, i) => (
-                <span key={i} className="text-red-500">❤️</span>
+                <span key={i} className="text-red-500 text-sm">❤️</span>
               ))}
             </div>
-            <div className="text-yellow-400">🏆 {score}</div>
+            <div className="text-xs text-orange-400">🏁 {speed.toFixed(1)}x</div>
+            {combo > 1 && (
+              <div className="text-xs text-pink-400 animate-pulse">
+                🔥 {combo}x
+              </div>
+            )}
           </div>
         </div>
 
+        {/* Shield Bar */}
+        {started && !gameOver && (
+          <div className="relative z-10 mb-2">
+            <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
+              <div 
+                className={`h-full transition-all duration-300 ${shieldCharge >= 100 ? 'bg-cyan-400 animate-pulse' : 'bg-blue-500'}`}
+                style={{ width: `${shieldCharge}%` }}
+              />
+            </div>
+            {shieldCharge >= 100 && (
+              <div className="absolute -top-1 right-0 text-xs text-cyan-400 animate-bounce">
+                🛡️ READY!
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Game Area */}
         <div 
-          className="flex-1 relative bg-gradient-to-b from-gray-700 via-gray-600 to-gray-700 rounded-2xl overflow-hidden border-4 border-gray-500/50"
-          onClick={(e) => {
-            if (started && !gameOver) {
-              moveCar(e.clientX, e.currentTarget.getBoundingClientRect());
-              shoot();
-            }
+          className={`flex-1 relative rounded-2xl overflow-hidden border-4 transition-all duration-300 ${
+            shieldActive 
+              ? 'border-cyan-400 shadow-[0_0_40px_rgba(34,211,238,0.9)]'
+              : 'border-gray-700'
+          }`}
+          style={{
+            background: shieldActive 
+              ? 'linear-gradient(180deg, #134e4a 0%, #0f766e 50%, #134e4a 100%)'
+              : 'linear-gradient(180deg, #1e293b 0%, #334155 50%, #1e293b 100%)'
           }}
+          onMouseDown={() => setIsDragging(true)}
+          onMouseUp={() => setIsDragging(false)}
+          onMouseLeave={() => setIsDragging(false)}
           onMouseMove={(e) => {
-            if (started && !gameOver) {
+            if (started && !gameOver && isDragging) {
               moveCar(e.clientX, e.currentTarget.getBoundingClientRect());
             }
           }}
+          onTouchStart={() => setIsDragging(true)}
+          onTouchEnd={() => setIsDragging(false)}
           onTouchMove={(e) => {
             if (started && !gameOver && e.touches[0]) {
+              e.preventDefault();
               moveCar(e.touches[0].clientX, e.currentTarget.getBoundingClientRect());
             }
           }}
+          onClick={(e) => {
+            if (started && !gameOver && shieldCharge >= 100) {
+              const rect = e.currentTarget.getBoundingClientRect();
+              const clickX = ((e.clientX - rect.left) / rect.width) * 100;
+              if (clickX > 40 && clickX < 60) {
+                activateShield();
+              }
+            }
+          }}
         >
-          {/* Animated Road Lines */}
-          <div className="absolute inset-0 flex justify-around opacity-40">
+          {/* Road markings */}
+          <div className="absolute inset-0 flex justify-around px-4">
+            {/* Left lane line */}
             <div 
-              className="w-1 h-full bg-yellow-400" 
+              className="w-1 h-full bg-white/30"
               style={{
-                backgroundImage: 'linear-gradient(to bottom, transparent 0%, transparent 40%, yellow 40%, yellow 60%, transparent 60%, transparent 100%)',
-                backgroundSize: '100% 40px',
-                backgroundPosition: `0 ${roadOffset}%`,
-                transition: 'none'
+                backgroundImage: 'linear-gradient(to bottom, white 40%, transparent 40%, transparent 60%, white 60%)',
+                backgroundSize: '100% 30px',
+                backgroundPosition: `0 ${roadOffset}%`
               }}
             />
+            {/* Right lane line */}
             <div 
-              className="w-2 h-full bg-white/30" 
+              className="w-1 h-full bg-white/30"
               style={{
-                backgroundImage: 'linear-gradient(to bottom, transparent 0%, transparent 30%, white 30%, white 70%, transparent 70%, transparent 100%)',
-                backgroundSize: '100% 60px',
-                backgroundPosition: `0 ${roadOffset}%`,
-                transition: 'none'
-              }}
-            />
-            <div 
-              className="w-1 h-full bg-yellow-400" 
-              style={{
-                backgroundImage: 'linear-gradient(to bottom, transparent 0%, transparent 40%, yellow 40%, yellow 60%, transparent 60%, transparent 100%)',
-                backgroundSize: '100% 40px',
-                backgroundPosition: `0 ${roadOffset}%`,
-                transition: 'none'
+                backgroundImage: 'linear-gradient(to bottom, white 40%, transparent 40%, transparent 60%, white 60%)',
+                backgroundSize: '100% 30px',
+                backgroundPosition: `0 ${roadOffset}%`
               }}
             />
           </div>
 
+          {/* Speed lines when shield active */}
+          {shieldActive && (
+            <div className="absolute inset-0 opacity-40">
+              {[...Array(15)].map((_, i) => (
+                <div
+                  key={i}
+                  className="absolute w-full h-1 bg-gradient-to-r from-transparent via-cyan-400 to-transparent animate-pulse"
+                  style={{
+                    top: `${(i * 6 + roadOffset) % 100}%`,
+                    animationDelay: `${i * 0.05}s`
+                  }}
+                />
+              ))}
+            </div>
+          )}
+
           {started && !gameOver && (
             <>
-              {/* Player Car */}
+              {/* Player Car - Facing Up */}
               <div
-                className="absolute transition-all duration-75"
+                className="absolute bottom-[10%] transition-all duration-100"
                 style={{
-                  left: `${carPos}%`,
-                  bottom: '8%',
+                  left: `${carX}%`,
                   transform: 'translateX(-50%)'
                 }}
               >
-                <div className="text-4xl drop-shadow-[0_0_15px_rgba(0,255,255,1)] filter brightness-110">
+                <div 
+                  className={`text-5xl ${shieldActive ? 'animate-pulse scale-110' : ''}`}
+                  style={{
+                    transform: 'rotate(90deg)',
+                    filter: shieldActive 
+                      ? 'drop-shadow(0 0 20px #00ffff) brightness(1.3)'
+                      : `drop-shadow(0 0 15px #3b82f6)`
+                  }}
+                >
                   🏎️
                 </div>
+                {shieldActive && (
+                  <div className="absolute inset-0 rounded-full border-4 border-cyan-400 animate-ping" 
+                       style={{ width: '60px', height: '60px', left: '-5px', top: '-5px' }} />
+                )}
               </div>
 
-              {/* Bullets / Shots */}
-              {bullets.map(b => (
+              {/* Particles */}
+              {particles.map(p => (
                 <div
-                  key={b.id}
-                  className="absolute w-1 h-6 bg-gradient-to-t from-cyan-400 via-blue-400 to-white rounded-full shadow-[0_0_15px_rgba(0,255,255,1)]"
+                  key={p.id}
+                  className="absolute w-2 h-2 rounded-full"
                   style={{
-                    left: `${b.x}%`,
-                    top: `${b.y}%`,
-                    transform: 'translateX(-50%)'
+                    left: `${p.x}%`,
+                    top: `${p.y}%`,
+                    backgroundColor: p.color,
+                    opacity: p.life / 25,
+                    boxShadow: `0 0 8px ${p.color}`
                   }}
                 />
               ))}
 
-              {/* Obstacles */}
-              {obstacles.map(o => (
+              {/* Objects */}
+              {objects.map(obj => (
                 <div
-                  key={o.id}
-                  className={`absolute transition-all ${o.hit ? 'scale-150 opacity-0 rotate-180' : 'scale-100'}`}
+                  key={obj.id}
+                  className={`absolute transition-opacity duration-300 ${obj.hit ? 'opacity-0 scale-150' : 'opacity-100'}`}
                   style={{
-                    left: `${o.x}%`,
-                    top: `${o.y}%`,
-                    transform: 'translateX(-50%)',
-                    transitionDuration: o.hit ? '400ms' : '0ms'
+                    left: `${obj.x}%`,
+                    top: `${obj.y}%`,
+                    transform: 'translateX(-50%)'
                   }}
                 >
-                  <div className={`text-3xl ${o.hit ? '' : 'drop-shadow-[0_0_8px_rgba(255,100,0,0.8)]'}`}>
-                    {o.hit ? '💥' : o.type}
-                  </div>
+                  {/* Shadow effect */}
+                  <div className="absolute w-12 h-3 bg-black/30 rounded-full blur-sm" 
+                       style={{ bottom: '-8px', left: '50%', transform: 'translateX(-50%)' }} />
+                  {obj.type === 'coin' && (
+                    <div className="text-3xl animate-spin" style={{ animationDuration: '1s' }}>
+                      🪙
+                    </div>
+                  )}
+                  {obj.type === 'shield' && (
+                    <div className="text-3xl animate-bounce">
+                      🛡️
+                    </div>
+                  )}
+                  {obj.type === 'life' && (
+                    <div className="text-3xl animate-pulse" style={{ filter: 'drop-shadow(0 0 10px #ff69b4)' }}>
+                      ❤️
+                    </div>
+                  )}
+                  {obj.type === 'car' && (
+                    <div className="text-4xl" style={{ filter: 'drop-shadow(0 0 10px #ff0000)', transform: 'rotate(-90deg)' }}>
+                      🚗
+                    </div>
+                  )}
+                  {obj.type === 'truck' && (
+                    <div className="text-5xl" style={{ filter: 'drop-shadow(0 0 10px #ff4500)', transform: 'rotate(-90deg)' }}>
+                      🚚
+                    </div>
+                  )}
                 </div>
               ))}
             </>
           )}
 
           {!started && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4 bg-black/50">
-              <div className="text-6xl mb-4 animate-bounce">🏁</div>
-              <h2 className="text-3xl font-bold mb-2 text-cyan-400">TURBO RACER</h2>
-              <p className="text-sm opacity-90 mb-4 max-w-xs">
-                Race against time! Tap to steer and shoot obstacles before you crash!
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4 bg-black/80 backdrop-blur-sm">
+              <div className="text-7xl mb-4 animate-bounce">🏁</div>
+              <h2 className="text-4xl font-bold mb-3 bg-gradient-to-r from-red-400 via-yellow-400 to-blue-400 bg-clip-text text-transparent">
+                TURBO SHIFT
+              </h2>
+              {highScore > 0 && (
+                <div className="mb-2 text-sm">
+                  <span className="text-gray-400">High Score: </span>
+                  <span className="text-yellow-400 font-bold">🏆 {highScore}</span>
+                </div>
+              )}
+              <p className="text-sm opacity-90 mb-4 max-w-xs leading-relaxed">
+                Dodge traffic, collect coins, and survive! Drag your car to move!
               </p>
-              <div className="text-xs opacity-75 mb-6 space-y-1">
-                <div>🚧 Dodge or destroy obstacles</div>
-                <div>💎 Diamonds = 50 pts | Others = 20 pts</div>
-                <div>⚡ Speed increases over time!</div>
+              <div className="text-xs mb-6 space-y-1 bg-black/50 p-3 rounded-lg">
+                <div>👆 Drag car left/right to move</div>
+                <div>🪙 Collect coins for points & shield</div>
+                <div>🛡️ Full shield bar = click center to activate!</div>
+                <div>❤️ Collect rare hearts for extra lives (max 5)</div>
+                <div>🚗🚚 Avoid traffic or lose lives!</div>
+                <div>🔥 Chain coins for combo multiplier!</div>
               </div>
               <button
                 onClick={startGame}
-                className="bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-bold px-8 py-3 rounded-full shadow-lg active:scale-95 transition-transform animate-pulse"
+                className="bg-gradient-to-r from-red-600 via-orange-600 to-yellow-600 text-white font-bold px-8 py-4 rounded-full shadow-lg active:scale-95 transition-all animate-pulse"
               >
-                🏁 START RACE
+                🚀 START RACE
               </button>
             </div>
           )}
 
           {gameOver && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4 bg-black/90">
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4 bg-black/90 backdrop-blur">
               <div className="text-6xl mb-4">💥</div>
-              <h2 className="text-3xl font-bold mb-2 text-red-500">CRASHED!</h2>
+              <h2 className="text-3xl font-bold mb-4 bg-gradient-to-r from-red-500 to-orange-500 bg-clip-text text-transparent">
+                RACE OVER!
+              </h2>
               <div className="mb-6 space-y-2">
-                <p className="text-sm text-gray-300">Survived: <span className="font-bold text-cyan-400">{time}s</span></p>
-                <p className="text-sm text-gray-300">Max Speed: <span className="font-bold text-yellow-400">x{speed.toFixed(1)}</span></p>
-                <p className="text-2xl font-bold text-yellow-400">Score: {score}</p>
+                <p className="text-3xl font-bold text-yellow-400">💰 {score}</p>
+                {score > highScore && score > 0 && (
+                  <p className="text-sm font-bold text-green-400 animate-pulse">🎉 NEW HIGH SCORE! 🎉</p>
+                )}
+                {highScore > 0 && score <= highScore && (
+                  <p className="text-xs text-gray-400">High Score: 🏆 {highScore}</p>
+                )}
+                <p className="text-sm text-gray-300">Distance: <span className="font-bold text-cyan-400">{Math.floor(distance)}m</span></p>
+                <p className="text-sm text-gray-300">Level Reached: <span className="font-bold text-purple-400">🎯 {level}</span></p>
+                <p className="text-sm text-gray-300">Max Combo: <span className="font-bold text-orange-400">{maxCombo}x</span></p>
+                <p className="text-sm text-gray-300">Top Speed: <span className="font-bold text-pink-400">{speed.toFixed(1)}x</span></p>
               </div>
               <button
                 onClick={startGame}
-                className="bg-gradient-to-r from-green-500 to-emerald-600 text-white font-bold px-8 py-3 rounded-full shadow-lg active:scale-95 transition-transform"
+                className="bg-gradient-to-r from-green-500 via-emerald-500 to-teal-500 text-white font-bold px-8 py-3 rounded-full shadow-lg active:scale-95 transition-transform"
               >
                 🔄 RACE AGAIN
               </button>
@@ -300,9 +511,13 @@ const GameSandbox: FC = () => {
           )}
         </div>
 
-        {/* Footer */}
-        <div className="mt-3 text-center text-xs opacity-70">
-          🎯 Tap/Move to steer • Click to shoot • Survive the race!
+        {/* Controls hint */}
+        <div className="relative z-10 mt-3 text-center text-xs opacity-70">
+          {started && !gameOver ? (
+            <span>� Drag car to move • {shieldCharge >= 100 ? '🛡️ Click center for SHIELD!' : '🛡️ Collect coins for shield'}</span>
+          ) : (
+            <span>🏎️ Drag to dodge • Shield protects you • Collect hearts!</span>
+          )}
         </div>
       </div>
     </div>
