@@ -1,5 +1,5 @@
 // Next, React
-import { FC, useEffect, useState } from 'react';
+import { FC, useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
 
 // Wallet
@@ -38,11 +38,30 @@ const GameSandbox: FC = () => {
   const [shake, setShake] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
 
+  // Refs for game loop to avoid dependency churn
+  const carXRef = useRef(carX);
+  const speedRef = useRef(speed);
+  const shieldActiveRef = useRef(shieldActive);
+  const levelRef = useRef(level);
+  const distanceRef = useRef(distance);
+  const lastShieldDistanceRef = useRef(lastShieldDistance);
+  const comboRef = useRef(combo);
+  const highScoreRef = useRef(highScore);
+
+  useEffect(() => { carXRef.current = carX; }, [carX]);
+  useEffect(() => { speedRef.current = speed; }, [speed]);
+  useEffect(() => { shieldActiveRef.current = shieldActive; }, [shieldActive]);
+  useEffect(() => { levelRef.current = level; }, [level]);
+  useEffect(() => { distanceRef.current = distance; }, [distance]);
+  useEffect(() => { lastShieldDistanceRef.current = lastShieldDistance; }, [lastShieldDistance]);
+  useEffect(() => { comboRef.current = combo; }, [combo]);
+  useEffect(() => { highScoreRef.current = highScore; }, [highScore]);
+
   // Speed and distance tracking
   useEffect(() => {
     if (!started || gameOver) return;
     const timer = setInterval(() => {
-      const currentSpeed = shieldActive ? speed * 1.5 : speed;
+      const currentSpeed = shieldActiveRef.current ? speedRef.current * 1.5 : speedRef.current;
       setDistance(d => {
         const newDistance = d + currentSpeed;
         // Level up every 150m, max level 10
@@ -60,7 +79,7 @@ const GameSandbox: FC = () => {
       });
     }, 100);
     return () => clearInterval(timer);
-  }, [started, gameOver, speed, shieldActive]);
+  }, [started, gameOver]);
 
   // Combo decay
   useEffect(() => {
@@ -75,8 +94,8 @@ const GameSandbox: FC = () => {
     if (!started || gameOver) return;
 
     const interval = setInterval(() => {
-      const currentSpeed = shieldActive ? speed * 1.5 : speed;
-      const levelSpeed = 1 + (level - 1) * 0.2; // Speed multiplier based on level
+      const currentSpeed = shieldActiveRef.current ? speedRef.current * 1.5 : speedRef.current;
+      const levelSpeed = 1 + (levelRef.current - 1) * 0.2; // Speed multiplier based on level
       
       // Animate road
       setRoadOffset(prev => (prev + currentSpeed * 3) % 100);
@@ -85,10 +104,10 @@ const GameSandbox: FC = () => {
       setObjects(prev => {
         const updated = prev.map(o => o.hit ? o : { ...o, y: o.y + (2 * currentSpeed * levelSpeed) });
         updated.forEach(obj => {
-          if (Math.abs(obj.x - carX) < 12 && obj.y > 75 && obj.y < 95 && !obj.hit) {
+          if (Math.abs(obj.x - carXRef.current) < 12 && obj.y > 75 && obj.y < 95 && !obj.hit) {
             if (obj.type === 'coin') {
               // Collect coin
-              const points = 10 + (combo * 5);
+              const points = 10 + (comboRef.current * 5);
               setScore(s => s + points);
               setCombo(c => {
                 const newCombo = c + 1;
@@ -96,23 +115,23 @@ const GameSandbox: FC = () => {
                 return newCombo;
               });
               setShieldCharge(n => Math.min(100, n + 10));
-              createParticles(carX, 85, '#fbbf24', 6);
+              createParticles(carXRef.current, 85, '#fbbf24', 6);
               obj.hit = true;
             } else if (obj.type === 'shield') {
               // Collect shield boost
               setShieldCharge(100);
               setScore(s => s + 50);
-              createParticles(carX, 85, '#00ffff', 8);
+              createParticles(carXRef.current, 85, '#00ffff', 8);
               obj.hit = true;
             } else if (obj.type === 'life') {
               // Collect life
               setLives(l => Math.min(5, l + 1));
               setScore(s => s + 100);
-              createParticles(carX, 85, '#ff69b4', 10);
+              createParticles(carXRef.current, 85, '#ff69b4', 10);
               obj.hit = true;
             } else if (obj.type === 'car' || obj.type === 'truck') {
               // Hit obstacle
-              if (!shieldActive) {
+              if (!shieldActiveRef.current) {
                 setShake(15);
                 setTimeout(() => setShake(0), 300);
                 setCombo(0);
@@ -123,7 +142,7 @@ const GameSandbox: FC = () => {
                     setGameOver(true);
                     // Update high score
                     setScore(currentScore => {
-                      if (currentScore > highScore) {
+                      if (currentScore > highScoreRef.current) {
                         setHighScore(currentScore);
                         if (typeof window !== 'undefined') {
                           localStorage.setItem('turboShiftHighScore', currentScore.toString());
@@ -134,11 +153,11 @@ const GameSandbox: FC = () => {
                   }
                   return newLives;
                 });
-                createParticles(carX, 85, '#ff0000', 12);
+                createParticles(carXRef.current, 85, '#ff0000', 12);
               } else {
                 // Destroy with shield
                 setScore(s => s + 30);
-                createParticles(carX, obj.y, '#00ffff', 10);
+                createParticles(carXRef.current, obj.y, '#00ffff', 10);
               }
               obj.hit = true;
             }
@@ -149,25 +168,25 @@ const GameSandbox: FC = () => {
       });
 
       // Spawn objects - more frequent at higher levels
-      const spawnRate = 0.015 + (level * 0.008) + currentSpeed * 0.003;
+      const spawnRate = 0.015 + (levelRef.current * 0.008) + currentSpeed * 0.003;
       if (Math.random() < spawnRate) {
         const rand = Math.random();
         let type: 'coin' | 'car' | 'shield' | 'truck' | 'life';
         
         // More cars/trucks at higher levels
-        const carChance = 0.30 + (level * 0.04); // Increases with level
-        const truckChance = carChance + 0.15 + (level * 0.02);
-        const coinChance = Math.max(0.15, 0.40 - (level * 0.02)); // Decreases with level
+        const carChance = 0.30 + (levelRef.current * 0.04); // Increases with level
+        const truckChance = carChance + 0.15 + (levelRef.current * 0.02);
+        const coinChance = Math.max(0.15, 0.40 - (levelRef.current * 0.02)); // Decreases with level
         
         // Shield spawning controlled by distance - approximately 1 per 100m
-        const canSpawnShield = (distance - lastShieldDistance) >= 100;
+        const canSpawnShield = (distanceRef.current - lastShieldDistanceRef.current) >= 100;
         
         if (rand < coinChance) type = 'coin';
         else if (rand < coinChance + carChance) type = 'car';
         else if (rand < truckChance) type = 'truck';
         else if (rand < 0.99 && canSpawnShield) {
           type = 'shield';
-          setLastShieldDistance(distance);
+          setLastShieldDistance(distanceRef.current);
         }
         else if (rand >= 0.99) type = 'life'; // 1% chance - extremely rare
         else type = 'car'; // Default to car if shield not available
@@ -194,7 +213,7 @@ const GameSandbox: FC = () => {
     }, 30);
 
     return () => clearInterval(interval);
-  }, [started, gameOver, carX, speed, shieldActive, combo, level, distance, lastShieldDistance]);
+  }, [started, gameOver]);
 
   const createParticles = (x: number, y: number, color: string, count: number) => {
     const newParticles = Array.from({ length: count }, (_, i) => ({
@@ -210,8 +229,10 @@ const GameSandbox: FC = () => {
   };
 
   const moveCar = (clientX: number, rect: DOMRect) => {
-    const x = ((clientX - rect.left) / rect.width) * 100;
-    setCarX(Math.max(10, Math.min(90, x)));
+    requestAnimationFrame(() => {
+      const x = ((clientX - rect.left) / rect.width) * 100;
+      setCarX(Math.max(10, Math.min(90, x)));
+    });
   };
 
   const activateShield = () => {
@@ -242,9 +263,9 @@ const GameSandbox: FC = () => {
   };
 
   return (
-    <div className="w-full h-screen flex justify-center items-center bg-black md:py-6">
+    <div className="fixed inset-0 w-full h-full flex justify-center items-center bg-black overflow-hidden" style={{ touchAction: 'none' }}>
       <div 
-        className="w-full h-full md:w-[400px] md:h-[calc(400px*16/9)] md:max-h-[90vh] bg-gradient-to-b from-gray-900 via-gray-800 to-black md:rounded-3xl shadow-2xl p-3 md:p-4 flex flex-col text-white relative overflow-hidden"
+        className="w-full h-full md:w-[calc(90vh*0.5625)] md:h-[90vh] bg-gradient-to-b from-gray-900 via-gray-800 to-black md:rounded-3xl shadow-2xl p-3 md:p-4 flex flex-col text-white relative overflow-hidden"
         style={{
           transform: `translate(${shake * (Math.random() - 0.5)}px, ${shake * (Math.random() - 0.5)}px)`
         }}
