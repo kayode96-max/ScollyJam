@@ -91,7 +91,9 @@ const GameSandbox: FC = () => {
       highScore: 0,
       gameLoopInterval: null as any,
       distanceInterval: null as any,
-      comboTimeout: null as any
+      comboTimeout: null as any,
+      keyMoveInterval: null as any,
+      keysPressed: { left: false, right: false }
     };
   }
   const gameStateRef = (GameSandbox as any)._gameState;
@@ -115,6 +117,22 @@ const GameSandbox: FC = () => {
       const newX = Math.max(10, Math.min(90, x));
       setCarX(newX);
       gameStateRef.carX = newX;
+    });
+  };
+
+  const moveCarLeft = () => {
+    setCarX(x => {
+      const newX = Math.max(10, x - 10);
+      gameStateRef.carX = newX;
+      return newX;
+    });
+  };
+
+  const moveCarRight = () => {
+    setCarX(x => {
+      const newX = Math.min(90, x + 10);
+      gameStateRef.carX = newX;
+      return newX;
     });
   };
 
@@ -142,6 +160,79 @@ const GameSandbox: FC = () => {
     if (gameStateRef.comboTimeout) {
       clearTimeout(gameStateRef.comboTimeout);
       gameStateRef.comboTimeout = null;
+    }
+    if (gameStateRef.keyMoveInterval) {
+      clearInterval(gameStateRef.keyMoveInterval);
+      gameStateRef.keyMoveInterval = null;
+    }
+    // Remove keyboard event listeners
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    }
+  };
+
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      if (!gameStateRef.keysPressed.left) {
+        gameStateRef.keysPressed.left = true;
+        if (!gameStateRef.keyMoveInterval) {
+          gameStateRef.keyMoveInterval = setInterval(() => {
+            if (gameStateRef.keysPressed.left) {
+              setCarX(x => {
+                const newX = Math.max(10, x - 2);
+                gameStateRef.carX = newX;
+                return newX;
+              });
+            } else if (gameStateRef.keysPressed.right) {
+              setCarX(x => {
+                const newX = Math.min(90, x + 2);
+                gameStateRef.carX = newX;
+                return newX;
+              });
+            }
+          }, 50);
+        }
+      }
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      if (!gameStateRef.keysPressed.right) {
+        gameStateRef.keysPressed.right = true;
+        if (!gameStateRef.keyMoveInterval) {
+          gameStateRef.keyMoveInterval = setInterval(() => {
+            if (gameStateRef.keysPressed.left) {
+              setCarX(x => {
+                const newX = Math.max(10, x - 2);
+                gameStateRef.carX = newX;
+                return newX;
+              });
+            } else if (gameStateRef.keysPressed.right) {
+              setCarX(x => {
+                const newX = Math.min(90, x + 2);
+                gameStateRef.carX = newX;
+                return newX;
+              });
+            }
+          }, 50);
+        }
+      }
+    }
+  };
+
+  const handleKeyUp = (e: KeyboardEvent) => {
+    if (e.key === 'ArrowLeft') {
+      gameStateRef.keysPressed.left = false;
+      if (!gameStateRef.keysPressed.right && gameStateRef.keyMoveInterval) {
+        clearInterval(gameStateRef.keyMoveInterval);
+        gameStateRef.keyMoveInterval = null;
+      }
+    } else if (e.key === 'ArrowRight') {
+      gameStateRef.keysPressed.right = false;
+      if (!gameStateRef.keysPressed.left && gameStateRef.keyMoveInterval) {
+        clearInterval(gameStateRef.keyMoveInterval);
+        gameStateRef.keyMoveInterval = null;
+      }
     }
   };
 
@@ -172,8 +263,15 @@ const GameSandbox: FC = () => {
     gameStateRef.distance = 0;
     gameStateRef.lastShieldDistance = 0;
     gameStateRef.combo = 0;
+    gameStateRef.keysPressed = { left: false, right: false };
     
     setStarted(true);
+    
+    // Add keyboard event listeners
+    if (typeof window !== 'undefined') {
+      window.addEventListener('keydown', handleKeyDown);
+      window.addEventListener('keyup', handleKeyUp);
+    }
     
     // Start distance tracking
     gameStateRef.distanceInterval = setInterval(() => {
@@ -214,11 +312,11 @@ const GameSandbox: FC = () => {
         updated.forEach(obj => {
           // Check vertical collision range
           if (obj.y > 65 && obj.y < 105 && !obj.hit) {
-            // Hitboxes based on visual emoji size (in percentage coordinates)
-            const carLeft = gameStateRef.carX - 6;
-            const carRight = gameStateRef.carX + 6;
-            const objLeft = obj.x - 6;
-            const objRight = obj.x + 6;
+            // Very tight hitboxes - only triggers when visually touching
+            const carLeft = gameStateRef.carX - 3;
+            const carRight = gameStateRef.carX + 3;
+            const objLeft = obj.x - 3;
+            const objRight = obj.x + 3;
             
             // Check if boxes overlap
             const isOverlapping = carLeft < objRight && carRight > objLeft;
@@ -609,7 +707,34 @@ const GameSandbox: FC = () => {
         {/* Controls hint */}
         <div className="relative z-10 mt-3 text-center text-xs opacity-70">
           {started && !gameOver ? (
-            <span>� Drag car to move • {shieldCharge >= 100 ? '🛡️ Click center for SHIELD!' : '🛡️ Collect coins for shield'}</span>
+            <div className="flex flex-col gap-2 items-center">
+              <span>👆 Drag car to move • {shieldCharge >= 100 ? '🛡️ Click center for SHIELD!' : '🛡️ Collect coins for shield'}</span>
+              <div className="flex gap-3">
+                <button
+                  onClick={moveCarLeft}
+                  className="bg-blue-600 text-white font-bold px-6 py-2 rounded-full active:scale-95 transition-transform"
+                >
+                  ◀ LEFT
+                </button>
+                <button
+                  onClick={activateShield}
+                  disabled={shieldCharge < 100}
+                  className={`font-bold px-6 py-2 rounded-full active:scale-95 transition-all ${
+                    shieldCharge >= 100 
+                      ? 'bg-cyan-400 text-black animate-pulse' 
+                      : 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                  }`}
+                >
+                  🛡️ SHIELD
+                </button>
+                <button
+                  onClick={moveCarRight}
+                  className="bg-blue-600 text-white font-bold px-6 py-2 rounded-full active:scale-95 transition-transform"
+                >
+                  RIGHT ▶
+                </button>
+              </div>
+            </div>
           ) : (
             <span>🏎️ Drag to dodge • Shield protects you • Collect hearts!</span>
           )}
